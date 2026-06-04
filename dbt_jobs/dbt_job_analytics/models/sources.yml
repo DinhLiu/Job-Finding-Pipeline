@@ -1,0 +1,8 @@
+version: 2
+
+sources:
+  - name: postgres_raw                     # Data source identifier within dbt ecosystem
+    database: job_analytics               # Target physical database name in PostgreSQL
+    schema: staging                        # Target physical schema containing the loaded rows
+    tables:
+      - name: raw_jobs                     # Target raw table holding raw_payload (JSONB)

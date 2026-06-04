@@ -1,0 +1,15 @@
+version: 2
+
+models:
+  - name: stg_raw_jobs
+    description: "Staging layer enforcing unique constraints and basic structural checks on raw crawl data."
+    columns:
+      - name: job_id
+        description: "Primary key for job postings parsed from platform URLs."
+        tests:
+          - unique
+          - not_null
+      - name: company_name
+        description: "The hiring company organization name."
+        tests:
+          - not_null
