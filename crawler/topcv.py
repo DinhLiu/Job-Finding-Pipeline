@@ -1,6 +1,8 @@
 import argparse
 import json
+import random
 import re
+import time
 from types import TracebackType
 from typing import Any, Self
 
@@ -10,10 +12,12 @@ from playwright_stealth import Stealth
 
 _stealth = Stealth(navigator_languages_override=("vi-VN", "vi"))
 _TOPCV_JOBS_BASE = "https://www.topcv.vn/tim-viec-lam-"
+_TOPCV_DEFAULT_LISTING = "https://www.topcv.vn/viec-lam"
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
+
 
 class TOPCVCrawler:
     def __init__(self, *, headless: bool = True):
@@ -71,14 +75,24 @@ class TOPCVCrawler:
         return re.sub(r"-+", "-", slug).strip("-")
 
     @classmethod
-    def build_listing_url(cls, keyword: str | None = None, page_number: int = 1) -> str:
+    def build_listing_url(cls, keyword: str = "cong nghe thong tin", page_number: int = 1) -> str:
         if keyword:
             slug = cls.keyword_to_slug(keyword)
             url = f"{_TOPCV_JOBS_BASE}{slug}"
             if page_number > 1:
                 return f"{url}?page={page_number}"
             return url
-        return f"https://www.topcv.vn/viec-lam?page={page_number}"
+        return f"{_TOPCV_DEFAULT_LISTING}?page={page_number}"
+
+    @staticmethod
+    def _job_id_from_url(job_url: str | None) -> str | None:
+        if not job_url:
+            return None
+        match = re.search(r"/(\d+)\.html(?:\?|$)", job_url)
+        if match:
+            return match.group(1)
+        match = re.search(r"j(\d+)\.html", job_url)
+        return match.group(1) if match else None
 
     @staticmethod
     def _schema_types(node: dict) -> list[str]:
@@ -105,8 +119,15 @@ class TOPCVCrawler:
         return nodes
 
     @staticmethod
+    def _extract_ld_json(html_content: str, schema_type: str) -> dict | None:
+        for node in TOPCVCrawler._iter_ld_json_nodes(html_content):
+            if isinstance(node, dict) and schema_type in TOPCVCrawler._schema_types(node):
+                return node
+        return None
+
+    @staticmethod
     def extract_job_links(html_content: str) -> list[str]:
-        """Extract job URLs from SearchResultsPage JSON-LD (mainEntity.ItemList)."""
+        """TopCV: SearchResultsPage → mainEntity.ItemList → ListItem.item.url."""
         for node in TOPCVCrawler._iter_ld_json_nodes(html_content):
             if not isinstance(node, dict):
                 continue
@@ -115,33 +136,16 @@ class TOPCVCrawler:
             main_entity = node.get("mainEntity")
             if not isinstance(main_entity, dict) or main_entity.get("@type") != "ItemList":
                 continue
-            links = []
-            for element in main_entity.get("itemListElement", []):
-                if not isinstance(element, dict):
-                    continue
-                item = element.get("item")
-                if isinstance(item, dict) and item.get("url"):
-                    links.append(item["url"].strip())
+            links = [
+                item["url"].strip()
+                for element in main_entity.get("itemListElement", [])
+                if isinstance(element, dict)
+                for item in [element.get("item")]
+                if isinstance(item, dict) and item.get("url")
+            ]
             if links:
                 return links
         return []
-
-    @staticmethod
-    def _extract_ld_json(html_content: str, schema_type: str) -> dict | None:
-        for node in TOPCVCrawler._iter_ld_json_nodes(html_content):
-            if isinstance(node, dict) and schema_type in TOPCVCrawler._schema_types(node):
-                return node
-        return None
-
-    @staticmethod
-    def _job_id_from_url(job_url: str | None) -> str | None:
-        if not job_url:
-            return None
-        match = re.search(r"/(\d+)\.html(?:\?|$)", job_url)
-        if match:
-            return match.group(1)
-        match = re.search(r"j(\d+)\.html", job_url)
-        return match.group(1) if match else None
 
     @staticmethod
     def extract_job_posting(html_content: str, job_url: str | None = None) -> dict | None:
@@ -159,12 +163,15 @@ class TOPCVCrawler:
             "raw_payload": raw_payload,
         }
 
-    def crawl(self, page_number: int = 1, keyword: str | None = None) -> str:
-        listing_url = self.build_listing_url(keyword, page_number)
-        return self._fetch_page_html(listing_url)
-
     def crawl_job_html(self, job_url: str) -> str:
         return self._fetch_page_html(job_url)
+
+    def crawl(self, page_number: int = 1, keyword: str | None = None) -> list[str]:
+        listing_url = self.build_listing_url(keyword, page_number)
+        return self.extract_job_links(self._fetch_page_html(listing_url))
+
+    def crawl_search(self, keyword: str, page_number: int = 1) -> list[str]:
+        return self.crawl(page_number=page_number, keyword=keyword)
 
     def crawl_job(self, job_url: str) -> dict | None:
         return self.extract_job_posting(self._fetch_page_html(job_url), job_url)
@@ -172,107 +179,48 @@ class TOPCVCrawler:
     def crawl_jobs(self, job_urls: list[str]) -> list[dict]:
         records: list[dict] = []
         for job_url in job_urls:
-            record = self.crawl_job(job_url)
-            if record:
-                records.append(record)
+            try:
+                record = self.crawl_job(job_url)
+                if record:
+                    records.append(record)
+
+                time.sleep(random.uniform(1.0, 3.0))
+
+            except Exception as e:
+                print(f"Skipping URL due to error: {job_url}. Details: {e}")
+                continue
         return records
-
-    def crawl_links(self, page_number: int = 1, keyword: str | None = None) -> list[str]:
-        return self.extract_job_links(self.crawl(page_number=page_number, keyword=keyword))
-
-    def crawl_search(self, keyword: str, page_number: int = 1) -> str:
-        return self.crawl(page_number=page_number, keyword=keyword)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Crawl TopCV listing HTML")
+    parser = argparse.ArgumentParser(description="Crawl TopCV job listings")
     parser.add_argument(
         "-k",
         "--keyword",
-        default="Data Engineer",
-        help='Search keyword (e.g. "Data Engineer")',
+        default="cong nghe thong tin",
+        help='Search keyword (e.g. "Data Engineer", "Back end")',
     )
     parser.add_argument("-p", "--page", type=int, default=1, help="Listing page number")
-    parser.add_argument("-o", "--output", default="output.html", help="Output HTML file path")
-    parser.add_argument(
-        "-l",
-        "--links-output",
-        default="links.txt",
-        help="Output file for extracted job URLs (JSON array)",
-    )
-    parser.add_argument(
-        "--job-output",
-        default="job_output.html",
-        help="Output HTML file for the first job detail page",
-    )
-    parser.add_argument(
-        "--job-json-output",
-        default="job_output.json",
-        help="Output JSON file for extracted JobPosting raw_payload",
-    )
-    parser.add_argument(
-        "--job-url",
-        help="Crawl this job URL only (skip listing crawl)",
-    )
-    parser.add_argument(
-        "--skip-job",
-        action="store_true",
-        help="Only crawl listing, do not fetch a job detail page",
-    )
     parser.add_argument(
         "--headless",
         action="store_true",
-        default=True,
-        help="Run Chromium without UI (default: on)",
-    )
-    parser.add_argument(
-        "--no-headless",
-        action="store_false",
-        dest="headless",
-        help="Show Chromium window",
+        help="Run Chromium without UI (recommended for Docker/Airflow)",
     )
     args = parser.parse_args()
 
     with TOPCVCrawler(headless=args.headless) as crawler:
-        if args.job_url:
-            job_url = args.job_url
-            job_html = crawler.crawl_job_html(job_url)
-            job = TOPCVCrawler.extract_job_posting(job_html, job_url)
-            with open(args.job_output, "w", encoding="utf-8") as f:
-                f.write(job_html)
-            if not job:
-                raise SystemExit(f"No JobPosting JSON-LD found for {job_url}")
-            with open(args.job_json_output, "w", encoding="utf-8") as f:
-                json.dump(job, f, ensure_ascii=False, indent=2)
-            print(f"Crawled job: {job_url}")
-            print(f"Saved job HTML to {args.job_output} ({len(job_html)} chars)")
-            print(f"Saved job JSON to {args.job_json_output}")
-        else:
-            listing_url = crawler.build_listing_url(args.keyword, args.page)
-            print(listing_url)
-            html_content = crawler.crawl(page_number=args.page, keyword=args.keyword)
-            links = TOPCVCrawler.extract_job_links(html_content)
+        if args.keyword:
+            print(crawler.build_listing_url(args.keyword, args.page))
+        links = crawler.crawl(page_number=args.page, keyword=args.keyword)
+        if not links:
+            raise SystemExit("No job links found on listing page")
 
-            with open(args.output, "w", encoding="utf-8") as f:
-                f.write(html_content)
-            with open(args.links_output, "w", encoding="utf-8") as f:
-                json.dump(links, f, ensure_ascii=False, indent=2)
+        jobs = crawler.crawl_jobs(links)
+        if not jobs:
+            raise SystemExit("No JobPosting JSON-LD found for listing jobs")
 
-            print(f"Saved listing HTML to {args.output} ({len(html_content)} chars)")
-            print(f"Saved {len(links)} job links to {args.links_output}")
+    output_path = "topcv_output.json"
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(jobs, f, ensure_ascii=False, indent=2)
 
-            if not args.skip_job:
-                if not links:
-                    raise SystemExit("No job links found on listing page")
-                job_url = links[0]
-                job_html = crawler.crawl_job_html(job_url)
-                job = TOPCVCrawler.extract_job_posting(job_html, job_url)
-                if not job:
-                    raise SystemExit(f"No JobPosting JSON-LD found for {job_url}")
-                with open(args.job_output, "w", encoding="utf-8") as f:
-                    f.write(job_html)
-                with open(args.job_json_output, "w", encoding="utf-8") as f:
-                    json.dump(job, f, ensure_ascii=False, indent=2)
-                print(f"Crawled job: {job_url}")
-                print(f"Saved job HTML to {args.job_output}")
-                print(f"Saved job JSON to {args.job_json_output}")
+    print(f"Saved {len(jobs)} jobs to {output_path}")

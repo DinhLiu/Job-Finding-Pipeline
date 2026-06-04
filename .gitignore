@@ -218,3 +218,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 PLAN.md
+itviec_output.json
+topcv_output.json

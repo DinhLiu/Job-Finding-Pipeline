@@ -180,7 +180,7 @@ if __name__ == "__main__":
         if not jobs:
             raise SystemExit("No JobPosting JSON-LD found for listing jobs")
 
-    output_path = "output.json"
+    output_path = "itviec_output.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(jobs, f, ensure_ascii=False, indent=2)
 
