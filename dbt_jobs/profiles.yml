@@ -1,0 +1,12 @@
+dbt_job_analytics:
+  outputs:
+    dev:
+      dbname: job_analytics
+      host: 127.0.0.1
+      pass: warehouse_password
+      port: 5433
+      schema: analytics
+      threads: 4
+      type: postgres
+      user: warehouse_user
+  target: dev
