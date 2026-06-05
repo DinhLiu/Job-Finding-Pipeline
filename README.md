@@ -1,138 +1,327 @@
-# Multi-Source Job Market Data Pipeline & Analytics (DataOps-Driven)
+# Job Finding Pipeline
 
-An end-to-end, DataOps-driven ELT data pipeline that automatically collects, cleans, orchestrates, and analyzes job postings from multiple tech recruitment platforms (ITViec, TopCV). The system features a dual-mode execution (Automated Daily Sweeps & Interactive Chatbox Requests) controlled via a Telegram Bot.
+An ELT data pipeline for crawling job postings from ITViec and TopCV, storing raw JSON-LD payloads in MinIO, loading them into PostgreSQL, transforming them with dbt, and sending a cleaned job report to Discord.
 
-## 🏗️ System Architecture
-
-The project shifts away from traditional ETL to a modern **ELT (Extract-Load-Transform)** architecture using the **Modern Data Stack**:
-
-1. **Extract & Load (EL):** Containerized Python scripts driven by **Playwright** simulate browser behaviors to bypass anti-bot mechanisms, fetch job postings, and dump raw JSON payloads into **MinIO** (S3-compatible Object Storage).
-2. **Ingestion:** Raw payloads are extracted minimally and appended into a PostgreSQL staging area without heavy upstream transformations.
-3. **Transform (T):** **dbt (Data Build Tool)** acts as the core transformation engine inside **PostgreSQL**, converting raw, unstructured JSON structures into clean, analytical star-schema data models through a multi-layered SQL pipeline.
-4. **Orchestration:** **Apache Airflow** acts as the central nervous system, managing dependencies, operational retries, and failure alerts.
-5. **Analytics & Alerts:** **Metabase** provides visual intelligence on market trends, while real-time job matching criteria trigger outbound alerts back to the user via **Discord**.
-
-## 🛠️ Tech Stack
-
-* **Orchestration:** Apache Airflow
-* **Data Collection & Ingestion:** Python, Playwright, Scrapy, DuckDB
-* **Raw Data Storage (Data Lake):** MinIO (S3-Compatible Object Storage)
-* **Data Warehouse:** PostgreSQL
-* **Data Transformation & Quality Assurance:** dbt (Data Build Tool)
-* **Visualization / BI:** Metabase
-* **Control Interface & Alerting:** Discord Bot API
-* **Infrastructure:** Docker, Docker Compose
-
-## 📁 Project Structure
+## Current Architecture
 
 ```text
-├── airflow/                  # Apache Airflow core components
-│   └── dags/
-│       ├── auto_data_pipeline.py    # Scheduled Midnight Sweep DAG (auto_data mode)
-│       └── manual_crawl_pipeline.py # On-demand Triggered DAG (crawl_data mode)
-├── crawler/                  # Scraper service blueprints
-│   ├── scraper.py            # Playwright browser automation engines
-│   └── upload_to_minio.py    # Local raw data lake synchronization
-├── telegram_bot/             # Chatbox listener running 24/7
-│   └── bot_listener.py       # Intercepts commands and triggers Airflow REST API
-└── dbt_job_analytics/        # dbt transformation models & tests
-    ├── dbt_project.yml       # Core dbt configuration
-    ├── packages.yml          # External dbt dependencies (dbt_utils)
-    └── models/
-        ├── staging/          # Staging Layer: Schema casting and source alignment
-        │   ├── stg_itviec.sql
-        │   ├── stg_topcv.sql
-        │   └── schema.yml    # Data quality constraints (unique, not_null)
-        ├── intermediate/     # Intermediate Layer: Complex Regex for salary & skills parsing
-        │   └── int_clean_jobs.sql
-        └── marts/            # Marts Layer: Dimension and Fact tables built for BI
-            └── dim_jobs.sql
-
+Discord command
+  -> Discord bot
+  -> Airflow DAG trigger
+  -> Playwright crawlers
+  -> MinIO raw JSON storage
+  -> PostgreSQL staging.raw_jobs
+  -> dbt analytics models
+  -> Discord webhook report
 ```
 
-## ⚙️ Operational Modes
+## Tech Stack
 
-The pipeline explicitly decouples system routines from ad-hoc operational requests into two robust behaviors:
+- Python 3.11
+- Playwright, BeautifulSoup
+- MinIO
+- PostgreSQL 15
+- Apache Airflow 2.10.0
+- dbt Core / dbt-postgres 1.8.0
+- Discord bot and Discord webhook
+- Docker Compose
 
-### 1. `auto_data` Mode (Automated Daily Sweeps)
+## Repository Structure
 
-* **Trigger:** Scheduled natively by Airflow at `00:00 UTC` every midnight.
-* **Scope:** Traverses a static array of predefined data-centric keywords (`["Data Engineer", "Data Analyst", "Data Scientist"]`).
-* **Behavior:** Scans only the first 2 chronological pages of each target platform to capture newly posted openings within the past 24 hours. Minimizes footprint to guarantee IP protection.
+```text
+.
+|-- airflow/
+|   `-- dags/
+|       `-- auto_data_pipeline.py
+|-- dbt_jobs/
+|   |-- profiles.yml
+|   `-- dbt_job_analytics/
+|       |-- dbt_project.yml
+|       `-- models/
+|           |-- sources.yml
+|           |-- schema.yml
+|           |-- stg_raw_jobs.sql
+|           |-- int_job_postings.sql
+|           `-- dim_job_postings.sql
+|-- discord_bot/
+|   |-- discord_bot.py
+|   `-- dockerfile
+|-- scripts/
+|   |-- crawler.py
+|   |-- load_to_minio.py
+|   |-- load_to_postgres.py
+|   |-- report_to_discord.py
+|   `-- crawlers/
+|       |-- it_viec.py
+|       `-- topcv.py
+|-- docker-compose.yml
+|-- dockerfile
+|-- init.sql
+|-- requirements.txt
+`-- README.md
+```
 
-### 2. `crawl_data` Mode (Interactive Chatbox Requests)
+## Main Components
 
-* **Trigger:** On-demand execution initiated via user text prompt in Discord.
-* **Command Syntax:** `!search -k "<keyword>" -p <pages>` (e.g., `!search -k "Golang" -p 5`).
-* **Behavior:** The Discord bot parses the keyword and page count, then issues an authenticated HTTP POST payload to trigger the Airflow API parameters dynamically, extracting deep historical records.
+### Crawlers
 
-## 💎 Key DE Engineering Implementations
+The crawler entrypoint is:
 
-### Idempotency & Database Deduping (UPSERT)
+```bash
+python scripts/crawler.py --headless -k "Data Engineer" --pages 3
+```
 
-To prevent duplicate job records during daily scanning cycles, the transformation layer leverages native PostgreSQL constraints. The primary identity token is bound to the platform's proprietary job ID parsed from the URL.
+It crawls the first `N` listing pages for each keyword. For example, `--pages 3` crawls pages `1`, `2`, and `3`, not only page `3`.
+
+The crawler currently supports:
+
+- `scripts/crawlers/it_viec.py`
+- `scripts/crawlers/topcv.py`
+
+Each crawler extracts job URLs from listing pages, opens each job detail page, extracts `JobPosting` JSON-LD, and uploads records to MinIO.
+
+### MinIO Raw Storage
+
+Raw records are uploaded to the `raw-job-payloads` bucket with date-partitioned keys:
+
+```text
+itviec/YYYY/MM/DD/itviec_output.json
+topcv/YYYY/MM/DD/topcv_output.json
+```
+
+### PostgreSQL Ingestion
+
+`scripts/load_to_postgres.py` reads the newest JSON object per source from MinIO and upserts rows into:
+
+```text
+staging.raw_jobs
+```
+
+The table is created by `init.sql` and uses this primary key:
 
 ```sql
-/* Ensure data pipeline consistency via SQL Upsert operations */
-INSERT INTO analytical.dim_jobs (job_id, title, company, salary_min, salary_max, updated_at)
-VALUES (%s, %s, %s, %s, %s, %s)
-ON CONFLICT (job_id) 
-DO UPDATE SET 
-    salary_min = EXCLUDED.salary_min,
-    salary_max = EXCLUDED.salary_max,
-    updated_at = EXCLUDED.updated_at;
-
+PRIMARY KEY (job_id, source_platform)
 ```
 
-### dbt Multi-Layered Transformation & Regex Parsing
+### dbt Models
 
-Dirty salary string ranges (e.g., "$1500 - $2500 USD", "Thoả thuận", "Up to 40M") are structured natively in the database using robust SQL regular expressions inside dbt intermediate states to produce uniform numeric metrics (`salary_min`, `salary_max`, `currency`).
+The dbt project is in:
 
-### Automated Data Quality Testing
+```text
+dbt_jobs/dbt_job_analytics
+```
 
-Utilizes `dbt test` assertions natively built into the continuous cycle to ensure missing properties or structural degradation from unexpected website redesigns do not corrupt reporting layer components:
+Models:
 
-* `unique` assertions on `job_id`.
-* `not_null` validation constraints on core targets (`title`, `company`).
-* Custom testing thresholds ensuring `salary_max >= salary_min`.
+- `stg_raw_jobs.sql`: reads `staging.raw_jobs` and extracts base JSON fields.
+- `int_job_postings.sql`: parses salary fields, negotiable flags, normalized salary metrics, and location.
+- `dim_job_postings.sql`: creates the final analytics table with job level classification.
 
-## 🚀 Getting Started
+Final reporting table:
 
-### Prerequisites
+```text
+analytics.dim_job_postings
+```
 
-* Docker & Docker Compose installed.
-* A Telegram Bot token (generated via `@BotFather`).
+### Discord Bot
 
-### Step 1: Environment Configuration
+The Discord bot is in:
 
-Clone the repository and set up your environment configurations in a `.env` file:
+```text
+discord_bot/discord_bot.py
+```
+
+Command syntax:
+
+```text
+!search -k "Data Engineer" -p 3
+```
+
+Options:
+
+- `-k`, `--keyword`: search keyword.
+- `-p`, `--pages`: number of listing pages to crawl from each source. Defaults to `1`.
+
+The bot triggers Airflow through:
+
+```text
+http://airflow-webserver:8080/api/v1/dags/auto_data_pipeline/dagRuns
+```
+
+Payload example:
+
+```json
+{
+  "conf": {
+    "keyword": "Data Engineer",
+    "pages": 3
+  }
+}
+```
+
+### Discord Report
+
+`scripts/report_to_discord.py` queries:
+
+```text
+analytics.dim_job_postings
+```
+
+It sends a Discord embed containing:
+
+- total cleaned jobs extracted today
+- top jobs ordered by `salary_max DESC NULLS LAST`
+- job title, company, URL, and salary range
+
+## Airflow DAG
+
+The main DAG is:
+
+```text
+airflow/dags/auto_data_pipeline.py
+```
+
+DAG ID:
+
+```text
+auto_data_pipeline
+```
+
+Schedule:
+
+```text
+0 0 * * *
+```
+
+Task order:
+
+```text
+crawl_to_minio
+  -> load_minio_to_postgres
+  -> dbt_transformation_run
+  -> dbt_quality_test
+  -> send_clean_data_report
+```
+
+The DAG accepts runtime config:
+
+```json
+{
+  "keyword": "Data Engineer",
+  "pages": 3
+}
+```
+
+If no config is passed, the DAG defaults to:
+
+```text
+keyword = Data Engineer
+pages = 1
+```
+
+## Environment Variables
+
+The Docker Compose file already defines most infrastructure variables for Airflow services.
+
+Expected variables:
 
 ```env
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-AUTHORIZED_CHAT_ID=your_private_telegram_chat_id
-AIRFLOW_IMAGE_NAME=apache/airflow:2.10.0
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_secure_password
+MINIO_ENDPOINT_URL=http://minio:9000
+MINIO_ACCESS_KEY=admin
+MINIO_SECRET_KEY=securepassword123
+MINIO_BUCKET_NAME=raw-job-payloads
 
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=job_analytics
+POSTGRES_USER=warehouse_user
+POSTGRES_PASSWORD=warehouse_password
+
+DISCORD_BOT_TOKEN=your_discord_bot_token
+DISCORD_WEBHOOK_URL=your_discord_webhook_url
 ```
 
-### Step 2: Initialize Infrastructure
+For local scripts outside Docker, use:
 
-Spin up the decoupled infrastructure layers (Airflow, MinIO, PostgreSQL, Metabase, and Telegram Listener) seamlessly via Docker Compose:
+```env
+MINIO_ENDPOINT_URL=http://localhost:9000
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5433
+```
+
+## Running With Docker Compose
+
+Start the stack:
 
 ```bash
 docker compose up -d --build
-
 ```
 
-### Step 3: Verify Services
+Initialize Airflow if needed:
 
-Once execution stabilizes, the local endpoints become active:
+```bash
+docker compose up airflow-init
+```
 
-* **Apache Airflow Webserver:** `http://localhost:8080`
-* **MinIO Console:** `http://localhost:9001`
-* **Metabase Analytics:** `http://localhost:3000`
+Open services:
 
-## 📊 Analytics Dashboard Showcase
+- Airflow: http://localhost:8080
+- MinIO Console: http://localhost:9001
+- PostgreSQL: localhost:5433
 
-*(Once active, embed screenshots here displaying Metabase charts depicting hiring densities by programming language, salary brackets distributed across seniority tiers, and tech stack demand shifts over time)*
+Default Airflow credentials from `docker-compose.yml`:
+
+```text
+username: admin
+password: admin
+```
+
+Default MinIO credentials from `docker-compose.yml`:
+
+```text
+username: admin
+password: securepassword123
+```
+
+## Manual Commands
+
+Run crawler locally:
+
+```bash
+python scripts/crawler.py --headless -k "Data Engineer" --pages 3
+```
+
+Load latest MinIO objects into PostgreSQL:
+
+```bash
+python scripts/load_to_postgres.py
+```
+
+Run dbt locally:
+
+```bash
+cd dbt_jobs/dbt_job_analytics
+dbt run --profiles-dir .. --target dev
+dbt test --profiles-dir .. --target dev
+```
+
+Send Discord report:
+
+```bash
+python scripts/report_to_discord.py
+```
+
+## Data Flow Details
+
+1. `scripts/crawler.py` crawls ITViec and TopCV.
+2. `scripts/load_to_minio.py` uploads raw JSON arrays to MinIO.
+3. `scripts/load_to_postgres.py` reads latest MinIO objects and upserts into `staging.raw_jobs`.
+4. dbt builds staging, intermediate, and dimension models in PostgreSQL.
+5. `scripts/report_to_discord.py` sends a summary report to Discord.
+
+## Notes
+
+- `--pages N` means crawl pages `1..N` for each source.
+- The pipeline upserts by `(job_id, source_platform)`, so repeated runs update existing jobs instead of inserting duplicates.
+- `analytics.dim_job_postings` is materialized as a dbt table.
+- The Discord bot starts the pipeline; the final report is sent by webhook after dbt tests pass.
