@@ -52,11 +52,11 @@ def load_raw_jobs_to_postgres(source_platform: str, object_key: str | None = Non
         return
 
     db_params = {
-        "host": os.getenv("POSTGRES_HOST", "127.0.0.1"),
-        "database": os.getenv("POSTGRES_DB", "job_analytics"),
-        "user": os.getenv("POSTGRES_USER", "warehouse_user"),
-        "password": os.getenv("POSTGRES_PASSWORD", "warehouse_password"),
-        "port": os.getenv("POSTGRES_PORT", "5433"),
+        "host": os.getenv("POSTGRES_HOST"),
+        "database": os.getenv("POSTGRES_DB"),
+        "user": os.getenv("POSTGRES_USER"),
+        "password": os.getenv("POSTGRES_PASSWORD"),
+        "port": os.getenv("POSTGRES_PORT"),
     }
 
     try:

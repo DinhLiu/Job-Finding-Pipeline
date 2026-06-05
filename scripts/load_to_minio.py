@@ -11,10 +11,12 @@ DEFAULT_BUCKET_NAME = "raw-job-payloads"
 def get_minio_client():
     """Create an S3-compatible client for MinIO."""
     import os
-
-    minio_endpoint = os.getenv("MINIO_ENDPOINT_URL", "http://localhost:9000")
-    access_key = os.getenv("MINIO_ACCESS_KEY", "admin")
-    secret_key = os.getenv("MINIO_SECRET_KEY", "securepassword123")
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    minio_endpoint = os.getenv("MINIO_ENDPOINT_URL")
+    access_key = os.getenv("MINIO_ACCESS_KEY")
+    secret_key = os.getenv("MINIO_SECRET_KEY")
 
     return boto3.client(
         "s3",

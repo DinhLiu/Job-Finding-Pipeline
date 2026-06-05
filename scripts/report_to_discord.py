@@ -13,11 +13,11 @@ def fetch_clean_jobs_and_notify():
     Connects to the materialized dbt layer, extracts high-quality analytics insights, and posts to Discord
     """
     connection_config = {
-        "host": "postgres",
-        "database": "job_analytics",
-        "user": "warehouse_user",
-        "password": "warehouse_password",
-        "port": "5432"
+        "host": os.getenv('POSTGRES_HOST'),
+        "database": os.getenv('POSTGRES_DB'),
+        "user": os.getenv('POSTGRES_USER'),
+        "password": os.getenv('POSTGRES_PASSWORD'),
+        "port": os.getenv('POSTGRES_PORT')
     }
     
     try:
@@ -43,7 +43,7 @@ def fetch_clean_jobs_and_notify():
             FROM analytics.dim_job_postings 
             WHERE DATE(extracted_at) = CURRENT_DATE
             ORDER BY salary_max DESC NULLS LAST 
-            LIMIT 3;
+            LIMIT 10;
         """
         cursor.execute(jobs_query)
         top_jobs = cursor.fetchall()
