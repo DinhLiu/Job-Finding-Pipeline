@@ -34,6 +34,15 @@ services:
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
+      - MINIO_ENDPOINT_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=securepassword123
+      - MINIO_BUCKET_NAME=raw-job-payloads
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=job_analytics
+      - POSTGRES_USER=warehouse_user
+      - POSTGRES_PASSWORD=warehouse_password
     command: >
       bash -c "airflow db migrate &&
       airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com"
@@ -50,6 +59,15 @@ services:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - MINIO_ENDPOINT_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=securepassword123
+      - MINIO_BUCKET_NAME=raw-job-payloads
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=job_analytics
+      - POSTGRES_USER=warehouse_user
+      - POSTGRES_PASSWORD=warehouse_password
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
@@ -57,6 +75,7 @@ services:
     # STANDARD: Use explicit bash invocation to pass the command smoothly
     command: bash -c "airflow webserver"
     depends_on:
+      - minio
       - postgres
 
   airflow-scheduler:
@@ -67,6 +86,16 @@ services:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - MINIO_ENDPOINT_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=securepassword123
+      - MINIO_BUCKET_NAME=raw-job-payloads
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=job_analytics
+      - POSTGRES_USER=warehouse_user
+      - POSTGRES_PASSWORD=warehouse_password
+      - PYTHONPATH=/opt/airflow/project_root
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
@@ -74,6 +103,7 @@ services:
     # STANDARD: Use explicit bash invocation to pass the command smoothly
     command: bash -c "airflow scheduler"
     depends_on:
+      - minio
       - postgres
       
 volumes:

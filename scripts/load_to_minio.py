@@ -1,18 +1,22 @@
-# code_comment_style: English, explanation_style: Vietnamese
 from datetime import datetime
-import os
+import io
+import json
 import boto3
 from botocore.client import Config
+from botocore.exceptions import ClientError
 
-def upload_raw_to_minio(file_path: str, source_name: str):
-    """Uploads the raw JSON crawler output into the MinIO Data Lake bucket."""
-    minio_endpoint = "http://localhost:9000"
-    access_key = "admin"
-    secret_key = "securepassword123"
-    bucket_name = "raw-job-payloads"
+DEFAULT_BUCKET_NAME = "raw-job-payloads"
 
-    # Initialize MinIO client compatible with AWS S3 API
-    s3 = boto3.resource(
+
+def get_minio_client():
+    """Create an S3-compatible client for MinIO."""
+    import os
+
+    minio_endpoint = os.getenv("MINIO_ENDPOINT_URL", "http://localhost:9000")
+    access_key = os.getenv("MINIO_ACCESS_KEY", "admin")
+    secret_key = os.getenv("MINIO_SECRET_KEY", "securepassword123")
+
+    return boto3.client(
         "s3",
         endpoint_url=minio_endpoint,
         aws_access_key_id=access_key,
@@ -21,20 +25,49 @@ def upload_raw_to_minio(file_path: str, source_name: str):
         region_name="us-east-1",
     )
 
-    # Ensure the bucket exists before uploading
-    bucket = s3.Bucket(bucket_name)
-    if not bucket.creation_date:
-        s3.create_bucket(Bucket=bucket_name)
 
-    # Construct a historical partitioned path: e.g., itviec/2026/06/04/output.json
+def ensure_bucket_exists(bucket_name: str = DEFAULT_BUCKET_NAME) -> None:
+    """Create the raw bucket if it does not exist yet."""
+    s3 = get_minio_client()
+    try:
+        s3.head_bucket(Bucket=bucket_name)
+    except ClientError as e:
+        status_code = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if status_code == 404:
+            s3.create_bucket(Bucket=bucket_name)
+            return
+        raise
+
+
+def build_raw_object_key(source_name: str, file_name: str = "output.json") -> str:
+    """Build a partitioned object key such as itviec/2026/06/05/output.json."""
     current_date = datetime.now()
-    destination_path = f"{source_name}/{current_date.strftime('%Y/%m/%d')}/{os.path.basename(file_path)}"
+    return f"{source_name}/{current_date.strftime('%Y/%m/%d')}/{file_name}"
 
-    print(f"Uploading {file_path} to MinIO bucket '{bucket_name}' at '{destination_path}'...")
-    bucket.upload_file(file_path, destination_path)
+
+def upload_json_to_minio(
+    records: list[dict],
+    source_name: str,
+    *,
+    bucket_name: str = DEFAULT_BUCKET_NAME,
+    file_name: str = "output.json",
+) -> str:
+    """Upload crawled JSON records directly to MinIO without writing local files."""
+    ensure_bucket_exists(bucket_name)
+    object_key = build_raw_object_key(source_name, file_name)
+    payload = json.dumps(records, ensure_ascii=False, indent=2).encode("utf-8")
+
+    print(f"Uploading {len(records)} {source_name} records to s3://{bucket_name}/{object_key}...")
+    get_minio_client().put_object(
+        Bucket=bucket_name,
+        Key=object_key,
+        Body=io.BytesIO(payload),
+        ContentLength=len(payload),
+        ContentType="application/json",
+    )
     print("Upload complete.")
+    return object_key
+
 
 if __name__ == "__main__":
-    # Test uploading your current output file
-    upload_raw_to_minio("itviec_output.json", "itviec")
-    upload_raw_to_minio("topcv_output.json", "topcv")
+    raise SystemExit("Use scripts/crawler.py to crawl and upload data directly to MinIO.")

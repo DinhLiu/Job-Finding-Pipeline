@@ -1,6 +1,8 @@
 import argparse
 import json
 import re
+import sys
+from pathlib import Path
 from types import TracebackType
 from typing import Self
 import random
@@ -9,6 +11,9 @@ import time
 from bs4 import BeautifulSoup
 from playwright.sync_api import Browser, BrowserContext, sync_playwright
 from playwright_stealth import Stealth
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from load_to_minio import upload_json_to_minio
 
 _stealth = Stealth(navigator_languages_override=("vi-VN", "vi"))
 _ITVIEC_JOBS_BASE = "https://itviec.com/it-jobs"
@@ -180,8 +185,5 @@ if __name__ == "__main__":
         if not jobs:
             raise SystemExit("No JobPosting JSON-LD found for listing jobs")
 
-    output_path = "itviec_output.json"
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(jobs, f, ensure_ascii=False, indent=2)
-
-    print(f"Saved {len(jobs)} jobs to {output_path}")
+    object_key = upload_json_to_minio(jobs, "itviec", file_name="itviec_output.json")
+    print(f"Uploaded {len(jobs)} jobs to MinIO object {object_key}")
