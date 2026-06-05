@@ -4,7 +4,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install necessary Python libraries
-RUN pip install --no-cache-dir discord.py requests python-dotenv
+RUN pip install --no-cache-dir discord.py requests python-dotenv aiohttp
 
 # Execute the bot script
 CMD ["python", "discord_bot.py"]
