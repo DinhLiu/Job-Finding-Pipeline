@@ -1,10 +1,12 @@
+# code_comment_style: English, explanation_style: Vietnamese
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
-# Define centralized runtime workspace paths inside the Linux container as global variables
+# Define centralized runtime workspace paths mapped directly from your real structure
 PROJECT_ROOT = "/opt/airflow/project_root"
-DBT_DIR = f"{PROJECT_ROOT}/dbt_job_analytics"
+SCRIPTS_DIR = f"{PROJECT_ROOT}/scripts"          # Target folder holding your python extraction routines
+DBT_DIR = f"{PROJECT_ROOT}/dbt_jobs/dbt_job_analytics" # Exact path to your dbt project infrastructure
 
 default_args = {
     "owner": "airflow",
@@ -24,23 +26,22 @@ with DAG(
     catchup=False,
 ) as dag:
 
-    # Task 1: Execute Python crawl or ingestion script inside the mounted workspace safely using BashOperator
-    # NOTE: Adjust the path below (e.g., adding /crawler/) to match your exact repository structure
+    # Task 1: Execute Python ingestion script targeting the correct /scripts subdirectory location
     task_extract_load = BashOperator(
         task_id="extract_and_load_raw",
-        bash_command=f"python {PROJECT_ROOT}/load_to_postgres.py",
+        bash_command=f"python {SCRIPTS_DIR}/load_to_postgres.py",
     )
 
-    # Task 2: Trigger dbt transformation models to materialize clean datasets
+    # Task 2: Trigger dbt transformation models inside the targeted nested dbt structure
     task_dbt_run = BashOperator(
         task_id="dbt_transformation_run",
-        bash_command=f"cd {DBT_DIR} && dbt run --profiles-dir ..",
+        bash_command=f"cd {DBT_DIR} && dbt run --profiles-dir .. --target prod",
     )
 
-    # Task 3: Trigger dbt structural data quality assertions
+    # Task 3: Trigger dbt structural data quality assertions targeting the internal prod network topology
     task_dbt_test = BashOperator(
         task_id="dbt_quality_test",
-        bash_command=f"cd {DBT_DIR} && dbt test --profiles-dir ..",
+        bash_command=f"cd {DBT_DIR} && dbt test --profiles-dir .. --target prod",
     )
 
     # Enforce automated pipeline execution lineage sequence

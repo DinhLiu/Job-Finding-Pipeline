@@ -1,12 +1,25 @@
+# dbt profiles configuration split for Local development and Docker Orchestration layers
 dbt_job_analytics:
+  target: dev
   outputs:
+    # 1. PROFILE FOR LOCAL PC: Used when you run 'dbt run' manually via Windows PowerShell
     dev:
-      dbname: job_analytics
+      type: postgres
       host: 127.0.0.1
-      pass: warehouse_password
       port: 5433
+      user: warehouse_user
+      password: warehouse_password
+      dbname: job_analytics
       schema: analytics
       threads: 4
+
+    # 2. PROFILE FOR DOCKER NETWORKS: Used when Airflow triggers the execution internally
+    prod:
       type: postgres
+      host: postgres         # Matches the service name defined in docker-compose.yml
+      port: 5432             # Uses the internal standard Postgres port within Docker bridge network
       user: warehouse_user
-  target: dev
+      password: warehouse_password
+      dbname: job_analytics
+      schema: analytics
+      threads: 4

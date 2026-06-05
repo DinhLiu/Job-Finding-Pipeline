@@ -220,3 +220,8 @@ __marimo__/
 PLAN.md
 itviec_output.json
 topcv_output.json
+
+# Ignore dbt generated artifacts to prevent host-container cache conflicts
+dbt_jobs/dbt_job_analytics/target/
+dbt_jobs/dbt_job_analytics/dbt_packages/
+dbt_jobs/dbt_job_analytics/logs/
