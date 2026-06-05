@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+# Set working directory inside the container
+WORKDIR /app
+
+# Install necessary Python libraries
+RUN pip install --no-cache-dir discord.py requests python-dotenv
+
+# Execute the bot script
+CMD ["python", "discord_bot.py"]

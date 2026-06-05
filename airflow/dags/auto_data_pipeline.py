@@ -70,9 +70,17 @@ with DAG(
     catchup=False,
 ) as dag:
 
+    DYNAMIC_KEYWORD = "{{ dag_run.conf.get('keyword', 'Data Engineer') if dag_run and dag_run.conf else 'Data Engineer' }}"
+    DYNAMIC_PAGES = "{{ dag_run.conf.get('pages', 1) if dag_run and dag_run.conf else 1 }}"
+    
     task_crawl_to_minio = BashOperator(
         task_id="crawl_to_minio",
-        bash_command=f"python {SCRIPTS_DIR}/crawler.py --headless",
+        bash_command=f"python {SCRIPTS_DIR}/crawler.py --headless -k \"$CRAWL_KEYWORD\" --pages \"$CRAWL_PAGES\"",
+        env={
+            "CRAWL_KEYWORD": DYNAMIC_KEYWORD,
+            "CRAWL_PAGES": DYNAMIC_PAGES,
+        },
+        append_env=True,
     )
 
     task_load_to_postgres = BashOperator(

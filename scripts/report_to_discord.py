@@ -1,17 +1,18 @@
-# code_comment_style: English, explanation_style: Vietnamese
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import requests
 from datetime import datetime
 import os
+import time
 from dotenv import load_dotenv
 
-load_dotenv()
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENV_PATH = os.path.join(PROJECT_ROOT, '.env')
+
+load_dotenv(dotenv_path=ENV_PATH)
 DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
+
 def fetch_clean_jobs_and_notify():
-    """
-    Connects to the materialized dbt layer, extracts high-quality analytics insights, and posts to Discord
-    """
     connection_config = {
         "host": os.getenv('POSTGRES_HOST'),
         "database": os.getenv('POSTGRES_DB'),
@@ -24,72 +25,101 @@ def fetch_clean_jobs_and_notify():
         conn = psycopg2.connect(**connection_config)
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Query 1: Get total count using the correct 'extracted_at' column
+        # Query 1: Calculate the total count of 'Net-New' jobs within this session
         count_query = """
+            WITH JobFirstSeen AS (
+                SELECT url, MIN(extracted_at) as first_seen_time
+                FROM analytics.dim_job_postings
+                GROUP BY url
+            )
             SELECT COUNT(*) as total 
-            FROM analytics.dim_job_postings 
-            WHERE DATE(extracted_at) = CURRENT_DATE;
+            FROM JobFirstSeen 
+            WHERE first_seen_time >= NOW() - INTERVAL '30 minutes';
         """
         cursor.execute(count_query)
         total_clean_jobs = cursor.fetchone()["total"]
         
         if total_clean_jobs == 0:
-            print("No new clean jobs found for today. Skipping notification.")
+            print("No new clean jobs found for this session. Skipping notification.")
             return
 
-        # Query 2: Fetch Top 3 jobs matching exact Postgres columns: job_title, company_name, url, salary_max
         jobs_query = """
-            SELECT job_title, company_name, url, salary_min, salary_max, salary_currency 
-            FROM analytics.dim_job_postings 
-            WHERE DATE(extracted_at) = CURRENT_DATE
-            ORDER BY salary_max DESC NULLS LAST 
-            LIMIT 10;
+            WITH JobFirstSeen AS (
+                SELECT 
+                    job_title, 
+                    company_name, 
+                    url, 
+                    salary_min, 
+                    salary_max, 
+                    salary_currency,
+                    MIN(extracted_at) OVER (PARTITION BY url) as first_seen_time
+                FROM analytics.dim_job_postings
+            ),
+            DeduplicatedNewJobs AS (
+                SELECT DISTINCT job_title, company_name, url, salary_min, salary_max, salary_currency
+                FROM JobFirstSeen
+                WHERE first_seen_time >= NOW() - INTERVAL '30 minutes'
+            )
+            SELECT * FROM DeduplicatedNewJobs
+            ORDER BY salary_max DESC NULLS LAST;
         """
         cursor.execute(jobs_query)
-        top_jobs = cursor.fetchall()
+        all_new_jobs = cursor.fetchall()
         
-        fields = []
-        for idx, job in enumerate(top_jobs, 1):
-            title = job.get("job_title") or "N/A"
-            company = job.get("company_name") or "N/A"
-            link = job.get("url") or "https://google.com"
-            
-            # Format salary display based on min-max values smoothly
-            s_min = job.get("salary_min")
-            s_max = job.get("salary_max")
-            currency = job.get("salary_currency") or "VND"
-            
-            if s_min and s_max:
-                salary_display = f"{int(s_min):,} - {int(s_max):,} {currency}"
-            elif s_max:
-                salary_display = f"Up to {int(s_max):,} {currency}"
-            else:
-                salary_display = "Thỏa thuận"
-            
-            fields.append({
-                "name": f"🔥 {idx}. {title}",
-                "value": f"**Công ty:** {company}\n**Mức lương tinh lọc:** {salary_display}\n🔗 [Xem chi tiết chiêu mộ]({link})",
-                "inline": False
-            })
-            
-        payload = {
-            "username": "dbt Analytics Bot",
-            "avatar_url": "https://docs.getdbt.com/img/dbt-logo-light.svg",
-            "embeds": [{
-                "title": "📊 BÁO CÁO VIỆC LÀM ĐÃ QUA LÀM SẠCH & PHÂN TÍCH (dbt)",
-                "description": f"Mô hình dữ liệu dbt đã hoàn tất chạy! Phát hiện **{total_clean_jobs}** vị trí tuyển dụng đạt chuẩn chất lượng (đã lọc trùng và chuẩn hóa).",
-                "color": 16747520, # Distinct dbt Orange color code
-                "fields": fields,
-                "footer": {
-                    "text": "Đại lý Điều phối Trung tâm • Airflow Core Layer"
-                },
-                "timestamp": datetime.utcnow().isoformat()
-            }]
-        }
+        CHUNK_SIZE = 10
+        total_batches = (len(all_new_jobs) + CHUNK_SIZE - 1) // CHUNK_SIZE
         
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        response.raise_for_status()
-        print("Successfully dispatched dbt clean data report to Discord!")
+        for batch_idx in range(total_batches):
+            start_idx = batch_idx * CHUNK_SIZE
+            end_idx = start_idx + CHUNK_SIZE
+            current_chunk = all_new_jobs[start_idx:end_idx]
+            
+            fields = []
+            for idx, job in enumerate(current_chunk, start=start_idx + 1):
+                title = job.get("job_title") or "N/A"
+                company = job.get("company_name") or "N/A"
+                link = job.get("url") or "https://google.com"
+                
+                s_min = job.get("salary_min")
+                s_max = job.get("salary_max")
+                currency = job.get("salary_currency") or "VND"
+                
+                if s_min and s_max:
+                    salary_display = f"{int(s_min):,} - {int(s_max):,} {currency}"
+                elif s_max:
+                    salary_display = f"Up to {int(s_max):,} {currency}"
+                else:
+                    salary_display = "Thỏa thuận"
+                
+                fields.append({
+                    "name": f"{idx}. {title}",
+                    "value": f"Công ty: {company}\nMức lương tinh lọc: {salary_display}\n[Chi tiết tại]({link})",
+                    "inline": False
+                })
+            
+            page_info = f" (Trang {batch_idx + 1}/{total_batches})" if total_batches > 1 else ""
+                
+            payload = {
+                "username": "Job Announcement Bot",
+                "avatar_url": "https://docs.getdbt.com/img/dbt-logo-light.svg",
+                "embeds": [{
+                    "title": f"BÁO CÁO VIỆC LÀM MỚI{page_info}",
+                    "description": f"Phát hiện **{total_clean_jobs}** vị trí tuyển dụng.",
+                    "color": 16747520,
+                    "fields": fields,
+                    "footer": {
+                        "text": "Airflow Core Layer"
+                    },
+                    "timestamp": datetime.utcnow().isoformat()
+                }]
+            }
+            
+            response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+            response.raise_for_status()
+            print(f"Successfully dispatched batch {batch_idx + 1}/{total_batches} to Discord!")
+            
+            if batch_idx < total_batches - 1:
+                time.sleep(1.5)
         
     except Exception as error:
         print(f"Error executing reporting pipeline: {error}")

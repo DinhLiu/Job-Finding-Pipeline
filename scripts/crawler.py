@@ -32,6 +32,9 @@ def crawl_topcv(keyword: str, pages: int, headless: bool) -> list[dict]:
 
 
 def crawl_and_upload(keywords: list[str], pages: int, headless: bool) -> None:
+    if pages < 1:
+        raise ValueError("pages must be a positive integer")
+
     itviec_records: list[dict] = []
     topcv_records: list[dict] = []
 

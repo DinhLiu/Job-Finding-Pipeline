@@ -59,6 +59,7 @@ services:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
       - MINIO_ENDPOINT_URL=http://minio:9000
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=securepassword123
@@ -86,6 +87,7 @@ services:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
       - MINIO_ENDPOINT_URL=http://minio:9000
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=securepassword123
@@ -105,6 +107,20 @@ services:
     depends_on:
       - minio
       - postgres
+      
+  discord-bot:
+    build:
+      context: ./discord_bot
+      dockerfile: Dockerfile
+    container_name: de_project_discord_bot
+    restart: always
+    # Ensure Airflow is up before starting the bot
+    depends_on:
+      - airflow-webserver
+    volumes:
+      - ./discord_bot:/app
+    env_file:
+      - .env
       
 volumes:
   minio_data:

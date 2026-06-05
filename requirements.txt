@@ -5,3 +5,5 @@ boto3
 psycopg2-binary
 dbt-postgres==1.8.0
 python-dotenv
+discord.py 
+aiohttp

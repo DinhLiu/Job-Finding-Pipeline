@@ -10,7 +10,7 @@ The project shifts away from traditional ETL to a modern **ELT (Extract-Load-Tra
 2. **Ingestion:** Raw payloads are extracted minimally and appended into a PostgreSQL staging area without heavy upstream transformations.
 3. **Transform (T):** **dbt (Data Build Tool)** acts as the core transformation engine inside **PostgreSQL**, converting raw, unstructured JSON structures into clean, analytical star-schema data models through a multi-layered SQL pipeline.
 4. **Orchestration:** **Apache Airflow** acts as the central nervous system, managing dependencies, operational retries, and failure alerts.
-5. **Analytics & Alerts:** **Metabase** provides visual intelligence on market trends, while real-time job matching criteria trigger outbound alerts back to the user via **Telegram**.
+5. **Analytics & Alerts:** **Metabase** provides visual intelligence on market trends, while real-time job matching criteria trigger outbound alerts back to the user via **Discord**.
 
 ## 🛠️ Tech Stack
 
@@ -20,7 +20,7 @@ The project shifts away from traditional ETL to a modern **ELT (Extract-Load-Tra
 * **Data Warehouse:** PostgreSQL
 * **Data Transformation & Quality Assurance:** dbt (Data Build Tool)
 * **Visualization / BI:** Metabase
-* **Control Interface & Alerting:** Telegram Bot API
+* **Control Interface & Alerting:** Discord Bot API
 * **Infrastructure:** Docker, Docker Compose
 
 ## 📁 Project Structure
@@ -62,9 +62,9 @@ The pipeline explicitly decouples system routines from ad-hoc operational reques
 
 ### 2. `crawl_data` Mode (Interactive Chatbox Requests)
 
-* **Trigger:** On-demand execution initiated via user text prompt in Telegram.
-* **Command Syntax:** `/crawl <keyword> <pages>` (e.g., `/crawl Golang 5`).
-* **Behavior:** The Telegram bot securely checks user authorization (`chat_id`), parses inputs, and issues an authenticated HTTP POST payload to trigger the Airflow API parameters dynamically, extracting deep historical records.
+* **Trigger:** On-demand execution initiated via user text prompt in Discord.
+* **Command Syntax:** `!search -k "<keyword>" -p <pages>` (e.g., `!search -k "Golang" -p 5`).
+* **Behavior:** The Discord bot parses the keyword and page count, then issues an authenticated HTTP POST payload to trigger the Airflow API parameters dynamically, extracting deep historical records.
 
 ## 💎 Key DE Engineering Implementations
 
