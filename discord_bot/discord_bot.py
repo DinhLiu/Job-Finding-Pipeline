@@ -93,13 +93,34 @@ async def trigger_airflow(ctx, *, args: str = None):
                 json=payload,
                 headers=headers,
             ) as response:
-                
-                response.raise_for_status()
-                await ctx.send(f"Success! Airflow received keyword '{keyword}' with {pages} page(s) and started the Data Pipeline.")
-                
+                if response.status == 404:
+                    await ctx.send(
+                        "Airflow không tìm thấy DAG `auto_data_pipeline`. "
+                        "Kiểm tra Airflow UI có thấy DAG không; nếu không, chạy: "
+                        "`docker compose up -d --force-recreate airflow-webserver airflow-scheduler`"
+                    )
+                    return
+
+                if response.status >= 400:
+                    body = await response.text()
+                    print(f"API Error: {response.status} {body}")
+                    await ctx.send(
+                        f"Airflow trả lỗi HTTP {response.status}. "
+                        "Xem log bot hoặc Airflow UI để biết chi tiết."
+                    )
+                    return
+
+                await ctx.send(
+                    f"Success! Airflow received keyword '{keyword}' with {pages} page(s) "
+                    "and started the Data Pipeline."
+                )
+
     except aiohttp.ClientError as e:
         print(f"API Error: {e}")
-        await ctx.send("System Error: Cannot connect to Airflow server.")
+        await ctx.send(
+            "System Error: Cannot connect to Airflow server. "
+            "Đảm bảo Airflow đang chạy tại http://localhost:8080"
+        )
 
 if __name__ == "__main__":
     bot.run(TOKEN)

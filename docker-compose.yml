@@ -34,6 +34,8 @@ services:
     user: "0:0"
     volumes:
       - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/dags:/opt/airflow/dags
+      - ./scripts/docker-airflow-init.sh:/docker-airflow-init.sh:ro
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
@@ -46,13 +48,7 @@ services:
       - POSTGRES_DB=job_analytics
       - POSTGRES_USER=warehouse_user
       - POSTGRES_PASSWORD=warehouse_password
-    command: >
-      bash -c "mkdir -p /opt/airflow/logs &&
-      chown -R 50000:0 /opt/airflow/logs &&
-      runuser -u airflow -- airflow db migrate &&
-      runuser -u airflow -- airflow users create
-      --username admin --password admin --firstname Admin --lastname User
-      --role Admin --email admin@example.com || true"
+    command: bash /docker-airflow-init.sh
     depends_on:
       - postgres
 
@@ -62,11 +58,13 @@ services:
     restart: always
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
       - MINIO_ENDPOINT_URL=http://minio:9000
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=securepassword123
@@ -80,21 +78,32 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
       - .:/opt/airflow/project_root
-    # STANDARD: Use explicit bash invocation to pass the command smoothly
     command: bash -c "airflow webserver"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     depends_on:
-      - minio
-      - postgres
+      airflow-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+      postgres:
+        condition: service_started
 
   airflow-scheduler:
     build: .
     container_name: de_project_airflow_scheduler
     restart: always
+    env_file:
+      - .env
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
       - MINIO_ENDPOINT_URL=http://minio:9000
       - MINIO_ACCESS_KEY=admin
       - MINIO_SECRET_KEY=securepassword123
@@ -109,28 +118,31 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/logs:/opt/airflow/logs
       - .:/opt/airflow/project_root
-    # STANDARD: Use explicit bash invocation to pass the command smoothly
     command: bash -c "airflow scheduler"
     depends_on:
-      - minio
-      - postgres
-      
+      airflow-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_started
+      postgres:
+        condition: service_started
+
   discord-bot:
     build:
       context: ./discord_bot
       dockerfile: Dockerfile
     container_name: de_project_discord_bot
     restart: always
-    # Ensure Airflow is up before starting the bot
     depends_on:
-      - airflow-webserver
+      airflow-webserver:
+        condition: service_healthy
     volumes:
       - ./discord_bot:/app
     env_file:
       - .env
     environment:
       - AIRFLOW_API_URL=http://airflow-webserver:8080/api/v1/dags/auto_data_pipeline/dagRuns
-      
+
 volumes:
   minio_data:
   postgres_data:

@@ -2,7 +2,23 @@
 
 An ELT data pipeline for crawling job postings from ITViec and TopCV, storing raw JSON-LD payloads in MinIO, loading them into PostgreSQL, transforming them with dbt, and sending a cleaned job report to Discord.
 
-## Current Architecture
+## Quick Start
+
+```bash
+cp .env.example .env
+# Set DISCORD_BOT_TOKEN and DISCORD_WEBHOOK_URL in .env
+
+bash scripts/setup.sh
+docker compose up -d discord-bot   # optional
+```
+
+Open Airflow at http://localhost:8080 (`admin` / `admin`), then trigger the pipeline from the UI or Discord:
+
+```text
+!search -k "Data Engineer" -p 1
+```
+
+## Architecture
 
 ```text
 Discord command
@@ -17,7 +33,7 @@ Discord command
 
 ## Tech Stack
 
-- Python 3.11
+- Python 3.11+
 - Playwright, BeautifulSoup
 - MinIO
 - PostgreSQL 15
@@ -26,13 +42,20 @@ Discord command
 - Discord bot and Discord webhook
 - Docker Compose
 
+## Prerequisites
+
+- Docker and Docker Compose
+- Python 3.11+ (only if running scripts or the Discord bot locally)
+- Discord bot token and webhook URL
+
 ## Repository Structure
 
 ```text
 .
 |-- airflow/
-|   `-- dags/
-|       `-- auto_data_pipeline.py
+|   |-- dags/
+|   |   `-- auto_data_pipeline.py
+|   `-- logs/                         # created by setup; owned by Airflow user
 |-- dbt_jobs/
 |   |-- profiles.yml
 |   `-- dbt_job_analytics/
@@ -47,6 +70,8 @@ Discord command
 |   |-- discord_bot.py
 |   `-- dockerfile
 |-- scripts/
+|   |-- setup.sh                    # recommended first-time setup
+|   |-- docker-airflow-init.sh      # permissions + Airflow DB init
 |   |-- crawler.py
 |   |-- load_to_minio.py
 |   |-- load_to_postgres.py
@@ -54,6 +79,7 @@ Discord command
 |   `-- crawlers/
 |       |-- it_viec.py
 |       `-- topcv.py
+|-- .env.example
 |-- docker-compose.yml
 |-- dockerfile
 |-- init.sql
@@ -61,71 +87,76 @@ Discord command
 `-- README.md
 ```
 
-## Main Components
+## Setup
 
-### Crawlers
-
-The crawler entrypoint is:
+### Recommended: one-command setup
 
 ```bash
-python scripts/crawler.py --headless -k "Data Engineer" --pages 3
+cp .env.example .env
+bash scripts/setup.sh
 ```
 
-It crawls the first `N` listing pages for each keyword. For example, `--pages 3` crawls pages `1`, `2`, and `3`, not only page `3`.
+`scripts/setup.sh` runs these steps in order:
 
-The crawler currently supports:
+1. Create `.env` from `.env.example` if missing.
+2. Start Postgres and MinIO.
+3. Run `airflow-init` to fix log directory permissions, migrate the Airflow DB, and verify the DAG bind mount.
+4. Recreate `airflow-webserver` and `airflow-scheduler`.
+5. Wait for Airflow health and confirm `auto_data_pipeline` is loaded.
 
-- `scripts/crawlers/it_viec.py`
-- `scripts/crawlers/topcv.py`
+Start the Discord bot after setup:
 
-Each crawler extracts job URLs from listing pages, opens each job detail page, extracts `JobPosting` JSON-LD, and uploads records to MinIO.
-
-### MinIO Raw Storage
-
-Raw records are uploaded to the `raw-job-payloads` bucket with date-partitioned keys:
-
-```text
-itviec/YYYY/MM/DD/itviec_output.json
-topcv/YYYY/MM/DD/topcv_output.json
+```bash
+docker compose up -d discord-bot
 ```
 
-### PostgreSQL Ingestion
+### Manual setup
 
-`scripts/load_to_postgres.py` reads the newest JSON object per source from MinIO and upserts rows into:
+```bash
+cp .env.example .env
+mkdir -p airflow/logs
 
-```text
-staging.raw_jobs
+docker compose up -d --build postgres minio
+docker compose run --rm airflow-init
+docker compose up -d --force-recreate airflow-webserver airflow-scheduler
+docker compose up -d discord-bot
 ```
 
-The table is created by `init.sql` and uses this primary key:
+### Services
 
-```sql
-PRIMARY KEY (job_id, source_platform)
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Airflow | http://localhost:8080 | `admin` / `admin` |
+| MinIO Console | http://localhost:9001 | `admin` / `securepassword123` |
+| PostgreSQL | `localhost:5433` | `warehouse_user` / `warehouse_password` |
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in the required secrets:
+
+```env
+DISCORD_BOT_TOKEN=your_discord_bot_token
+DISCORD_WEBHOOK_URL=your_discord_webhook_url
 ```
 
-### dbt Models
+Docker Compose sets infrastructure variables for Airflow services. For local scripts outside Docker, `.env.example` already points to host endpoints:
 
-The dbt project is in:
-
-```text
-dbt_jobs/dbt_job_analytics
+```env
+MINIO_ENDPOINT_URL=http://localhost:9000
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5433
 ```
 
-Models:
+Discord bot Airflow settings:
 
-- `stg_raw_jobs.sql`: reads `staging.raw_jobs` and extracts base JSON fields.
-- `int_job_postings.sql`: parses salary fields, negotiable flags, normalized salary metrics, and location.
-- `dim_job_postings.sql`: creates the final analytics table with job level classification.
+| Run mode | `AIRFLOW_API_URL` |
+|----------|-------------------|
+| Local: `python -m discord_bot.discord_bot` | `http://localhost:8080/api/v1/dags/auto_data_pipeline/dagRuns` |
+| Docker: `docker compose up -d discord-bot` | `http://airflow-webserver:8080/api/v1/dags/auto_data_pipeline/dagRuns` (set automatically in `docker-compose.yml`) |
 
-Final reporting table:
+## Discord Bot
 
-```text
-analytics.dim_job_postings
-```
-
-### Discord Bot
-
-The Discord bot is in:
+Entry point:
 
 ```text
 discord_bot/discord_bot.py
@@ -139,16 +170,22 @@ Command syntax:
 
 Options:
 
-- `-k`, `--keyword`: search keyword.
-- `-p`, `--pages`: number of listing pages to crawl from each source. Defaults to `1`.
+- `-k`, `--keyword`: search keyword
+- `-p`, `--pages`: number of listing pages per source (default `1`)
 
-The bot triggers Airflow through:
+`--pages 3` crawls pages `1`, `2`, and `3` for each source.
 
-```text
-http://airflow-webserver:8080/api/v1/dags/auto_data_pipeline/dagRuns
+Run modes:
+
+```bash
+# Inside Docker (recommended for production-like setup)
+docker compose up -d discord-bot
+
+# On host (requires Airflow running at localhost:8080)
+python -m discord_bot.discord_bot
 ```
 
-Payload example:
+Trigger payload sent to Airflow:
 
 ```json
 {
@@ -159,39 +196,17 @@ Payload example:
 }
 ```
 
-### Discord Report
-
-`scripts/report_to_discord.py` queries:
-
-```text
-analytics.dim_job_postings
-```
-
-It sends a Discord embed containing:
-
-- total cleaned jobs extracted today
-- top jobs ordered by `salary_max DESC NULLS LAST`
-- job title, company, URL, and salary range
-
 ## Airflow DAG
 
-The main DAG is:
+DAG file:
 
 ```text
 airflow/dags/auto_data_pipeline.py
 ```
 
-DAG ID:
+DAG ID: `auto_data_pipeline`
 
-```text
-auto_data_pipeline
-```
-
-Schedule:
-
-```text
-0 0 * * *
-```
+Schedule: `0 0 * * *`
 
 Task order:
 
@@ -203,7 +218,7 @@ crawl_to_minio
   -> send_clean_data_report
 ```
 
-The DAG accepts runtime config:
+Runtime config:
 
 ```json
 {
@@ -212,76 +227,86 @@ The DAG accepts runtime config:
 }
 ```
 
-If no config is passed, the DAG defaults to:
+Defaults when no config is passed:
 
 ```text
 keyword = Data Engineer
 pages = 1
 ```
 
-## Environment Variables
+dbt tasks write build artifacts to `/tmp/dbt_logs` and `/tmp/dbt_target` inside the Airflow container so bind-mounted repo folders do not need write permission from the Airflow user.
 
-The Docker Compose file already defines most infrastructure variables for Airflow services.
+## Pipeline Components
 
-Expected variables:
-
-```env
-MINIO_ENDPOINT_URL=http://minio:9000
-MINIO_ACCESS_KEY=admin
-MINIO_SECRET_KEY=securepassword123
-MINIO_BUCKET_NAME=raw-job-payloads
-
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=job_analytics
-POSTGRES_USER=warehouse_user
-POSTGRES_PASSWORD=warehouse_password
-
-DISCORD_BOT_TOKEN=your_discord_bot_token
-DISCORD_WEBHOOK_URL=your_discord_webhook_url
-```
-
-For local scripts outside Docker, use:
-
-```env
-MINIO_ENDPOINT_URL=http://localhost:9000
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5433
-```
-
-## Running With Docker Compose
-
-Start the stack:
+### Crawlers
 
 ```bash
-docker compose up -d --build
+python scripts/crawler.py --headless -k "Data Engineer" --pages 3
 ```
 
-Initialize Airflow if needed:
+Supported sources:
+
+- `scripts/crawlers/it_viec.py`
+- `scripts/crawlers/topcv.py`
+
+Each crawler extracts job URLs from listing pages, opens job detail pages, extracts `JobPosting` JSON-LD, and uploads records to MinIO.
+
+### MinIO Raw Storage
+
+Bucket: `raw-job-payloads`
+
+Object keys:
+
+```text
+itviec/YYYY/MM/DD/itviec_output.json
+topcv/YYYY/MM/DD/topcv_output.json
+```
+
+### PostgreSQL Ingestion
+
+`scripts/load_to_postgres.py` reads the newest JSON object per source from MinIO and upserts into `staging.raw_jobs`.
+
+Primary key:
+
+```sql
+PRIMARY KEY (job_id, source_platform)
+```
+
+### dbt Models
+
+Project path:
+
+```text
+dbt_jobs/dbt_job_analytics
+```
+
+Models:
+
+- `stg_raw_jobs.sql`: reads `staging.raw_jobs` and extracts base JSON fields
+- `int_job_postings.sql`: parses salary, negotiable flags, normalized salary metrics, and location
+- `dim_job_postings.sql`: final analytics table with job level classification
+
+Final reporting table:
+
+```text
+analytics.dim_job_postings
+```
+
+Run locally:
 
 ```bash
-docker compose up airflow-init
+cd dbt_jobs/dbt_job_analytics
+dbt run --profiles-dir .. --target dev
+dbt test --profiles-dir .. --target dev
 ```
 
-Open services:
+### Discord Report
 
-- Airflow: http://localhost:8080
-- MinIO Console: http://localhost:9001
-- PostgreSQL: localhost:5433
+`scripts/report_to_discord.py` queries `analytics.dim_job_postings` and sends a Discord embed with:
 
-Default Airflow credentials from `docker-compose.yml`:
-
-```text
-username: admin
-password: admin
-```
-
-Default MinIO credentials from `docker-compose.yml`:
-
-```text
-username: admin
-password: securepassword123
-```
+- total new jobs seen in the current session
+- top jobs ordered by `salary_max DESC NULLS LAST`
+- job title, company, URL, and salary range
 
 ## Manual Commands
 
@@ -297,21 +322,22 @@ Load latest MinIO objects into PostgreSQL:
 python scripts/load_to_postgres.py
 ```
 
-Run dbt locally:
-
-```bash
-cd dbt_jobs/dbt_job_analytics
-dbt run --profiles-dir .. --target dev
-dbt test --profiles-dir .. --target dev
-```
-
 Send Discord report:
 
 ```bash
 python scripts/report_to_discord.py
 ```
 
-## Data Flow Details
+Install Python dependencies for local use:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install chromium
+```
+
+## Data Flow
 
 1. `scripts/crawler.py` crawls ITViec and TopCV.
 2. `scripts/load_to_minio.py` uploads raw JSON arrays to MinIO.
@@ -319,9 +345,57 @@ python scripts/report_to_discord.py
 4. dbt builds staging, intermediate, and dimension models in PostgreSQL.
 5. `scripts/report_to_discord.py` sends a summary report to Discord.
 
+## Troubleshooting
+
+### Airflow UI not loading or log permission errors
+
+```bash
+docker compose run --rm airflow-init
+docker compose restart airflow-webserver airflow-scheduler
+```
+
+### DAG missing or Discord bot gets HTTP 404
+
+Usually a stale bind mount. Recreate Airflow containers:
+
+```bash
+docker compose up -d --force-recreate airflow-webserver airflow-scheduler
+```
+
+Verify:
+
+```bash
+curl -s -u admin:admin http://localhost:8080/api/v1/dags
+docker exec de_project_airflow_webserver ls -la /opt/airflow/dags/
+```
+
+### `dbt_transformation_run` fails with exit code 2 and no output
+
+This was caused by Airflow lacking write permission on bind-mounted `dbt_jobs/`. The DAG now writes dbt artifacts to `/tmp`. If it still fails, rerun setup:
+
+```bash
+bash scripts/setup.sh
+```
+
+### Discord bot cannot connect to Airflow
+
+| Symptom | Fix |
+|---------|-----|
+| `Cannot connect to host airflow-webserver` | Bot is running on the host but URL points to Docker DNS. Use `localhost:8080` or set `AIRFLOW_API_URL` in `.env`. |
+| `404 NOT FOUND` on trigger | DAG is not active. Recreate Airflow containers and confirm the DAG appears in the UI. |
+
+### Full reset
+
+```bash
+docker compose down
+bash scripts/setup.sh
+```
+
 ## Notes
 
 - `--pages N` means crawl pages `1..N` for each source.
 - The pipeline upserts by `(job_id, source_platform)`, so repeated runs update existing jobs instead of inserting duplicates.
 - `analytics.dim_job_postings` is materialized as a dbt table.
 - The Discord bot starts the pipeline; the final report is sent by webhook after dbt tests pass.
+- Always run `airflow-init` before starting Airflow services on a fresh machine.
+- Prefer `bash scripts/setup.sh` over `docker compose up -d` alone to avoid permission and bind-mount issues.
