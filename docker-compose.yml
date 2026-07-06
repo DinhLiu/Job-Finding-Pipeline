@@ -31,6 +31,9 @@ services:
   airflow-init:
     build: .
     container_name: de_project_airflow_init
+    user: "0:0"
+    volumes:
+      - ./airflow/logs:/opt/airflow/logs
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://warehouse_user:warehouse_password@postgres:5432/job_analytics
@@ -44,8 +47,12 @@ services:
       - POSTGRES_USER=warehouse_user
       - POSTGRES_PASSWORD=warehouse_password
     command: >
-      bash -c "airflow db migrate &&
-      airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com"
+      bash -c "mkdir -p /opt/airflow/logs &&
+      chown -R 50000:0 /opt/airflow/logs &&
+      runuser -u airflow -- airflow db migrate &&
+      runuser -u airflow -- airflow users create
+      --username admin --password admin --firstname Admin --lastname User
+      --role Admin --email admin@example.com || true"
     depends_on:
       - postgres
 
