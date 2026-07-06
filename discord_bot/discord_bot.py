@@ -9,9 +9,12 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv('DISCORD_BOT_TOKEN')
 
-AIRFLOW_API_URL = "http://airflow-webserver:8080/api/v1/dags/auto_data_pipeline/dagRuns"
-AIRFLOW_USER = "admin"
-AIRFLOW_PASS = "admin"
+AIRFLOW_API_URL = os.getenv(
+    "AIRFLOW_API_URL",
+    "http://localhost:8080/api/v1/dags/auto_data_pipeline/dagRuns",
+)
+AIRFLOW_USER = os.getenv("AIRFLOW_USER", "admin")
+AIRFLOW_PASS = os.getenv("AIRFLOW_PASSWORD", os.getenv("AIRFLOW_PASS", "admin"))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -80,13 +83,15 @@ async def trigger_airflow(ctx, *, args: str = None):
     
     # Use aiohttp for asynchronous, non-blocking HTTP requests
     try:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": aiohttp.encode_basic_auth(AIRFLOW_USER, AIRFLOW_PASS),
+        }
         async with aiohttp.ClientSession() as session:
-            auth = aiohttp.BasicAuth(AIRFLOW_USER, AIRFLOW_PASS)
             async with session.post(
                 AIRFLOW_API_URL,
                 json=payload,
-                auth=auth,
-                headers={"Content-Type": "application/json"}
+                headers=headers,
             ) as response:
                 
                 response.raise_for_status()

@@ -49,6 +49,8 @@ def send_discord_alert(context):
 PROJECT_ROOT = "/opt/airflow/project_root"
 SCRIPTS_DIR = f"{PROJECT_ROOT}/scripts"
 DBT_DIR = f"{PROJECT_ROOT}/dbt_jobs/dbt_job_analytics"
+DBT_LOG_PATH = "/tmp/dbt_logs"
+DBT_TARGET_PATH = "/tmp/dbt_target"
 
 default_args = {
     "owner": "airflow",
@@ -90,11 +92,19 @@ with DAG(
 
     task_dbt_run = BashOperator(
         task_id="dbt_transformation_run",
-        bash_command=f"cd {DBT_DIR} && dbt run --profiles-dir .. --target prod",
+        bash_command=(
+            f"mkdir -p {DBT_LOG_PATH} {DBT_TARGET_PATH} && "
+            f"cd {DBT_DIR} && dbt run --profiles-dir .. --target prod "
+            f"--log-path {DBT_LOG_PATH} --target-path {DBT_TARGET_PATH}"
+        ),
     )
     task_dbt_test = BashOperator(
         task_id="dbt_quality_test",
-        bash_command=f"cd {DBT_DIR} && dbt test --profiles-dir .. --target prod",
+        bash_command=(
+            f"mkdir -p {DBT_LOG_PATH} {DBT_TARGET_PATH} && "
+            f"cd {DBT_DIR} && dbt test --profiles-dir .. --target prod "
+            f"--log-path {DBT_LOG_PATH} --target-path {DBT_TARGET_PATH}"
+        ),
     )
 
     task_discord_report = BashOperator(

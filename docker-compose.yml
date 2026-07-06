@@ -128,6 +128,8 @@ services:
       - ./discord_bot:/app
     env_file:
       - .env
+    environment:
+      - AIRFLOW_API_URL=http://airflow-webserver:8080/api/v1/dags/auto_data_pipeline/dagRuns
       
 volumes:
   minio_data:
