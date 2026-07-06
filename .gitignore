@@ -225,3 +225,5 @@ topcv_output.json
 dbt_jobs/dbt_job_analytics/target/
 dbt_jobs/dbt_job_analytics/dbt_packages/
 dbt_jobs/dbt_job_analytics/logs/
+
+logs/
